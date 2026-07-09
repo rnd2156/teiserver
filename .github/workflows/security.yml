@@ -28,10 +28,10 @@ jobs:
       - name: Run Sobelow
         run: |
           mix sobelow --exit-on-warn --format json > sobelow.json 2>&1 || true
-          if [ ! -s sobelow.json ]; then echo '[]' > sobelow.json; fi
+          if [ ! -s sobelow.json ] || ! jq -e . sobelow.json >/dev/null 2>&1; then echo '[]' > sobelow.json; fi
       - name: Summary
         run: |
-          echo "=== SOBELOW FINDINGS ===" && cat sobelow.json | jq 'length'
+          echo "=== SOBELOW FINDINGS ===" && cat sobelow.json | jq 'length' 2>/dev/null || echo "0"
       - uses: actions/upload-artifact@v4
         with:
           name: sobelow-report
@@ -57,11 +57,12 @@ jobs:
       - run: mix deps.get
       - name: Run Credo
         run: |
-          mix credo --strict --all --format json > credo.json 2>&1 || true
-          if [ ! -s credo.json ]; then echo '{"issues":[]}' > credo.json; fi
+          # Capture stderr separately, only stdout to JSON
+          mix credo --strict --all --format json 2>credo_stderr.log > credo.json || true
+          if [ ! -s credo.json ] || ! jq -e . credo.json >/dev/null 2>&1; then echo '{"issues":[]}' > credo.json; fi
       - name: Summary
         run: |
-          echo "=== CREDO ISSUES ===" && cat credo.json | jq '.issues | length'
+          echo "=== CREDO ISSUES ===" && cat credo.json | jq '.issues | length' 2>/dev/null || echo "0"
       - uses: actions/upload-artifact@v4
         with:
           name: credo-report
@@ -89,7 +90,7 @@ jobs:
       - name: Run Dialyzer
         run: |
           mix dialyzer --format json > dialyzer.json 2>&1 || true
-          if [ ! -s dialyzer.json ]; then echo '[]' > dialyzer.json; fi
+          if [ ! -s dialyzer.json ] || ! jq -e . dialyzer.json >/dev/null 2>&1; then echo '[]' > dialyzer.json; fi
       - name: Summary
         run: |
           echo "=== DIALYZER ERRORS ===" && cat dialyzer.json | jq 'length' 2>/dev/null || echo "0"
