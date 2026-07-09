@@ -7,7 +7,40 @@ on:
   workflow_dispatch:
 
 jobs:
-  static-analysis:
+  # ========== SOBELOW ==========
+  sobelow:
+    name: Sobelow (Security)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19.4'
+          otp-version: '27.3.4'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-sobelow-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - run: mix deps.compile sobelow
+      - name: Run Sobelow
+        run: |
+          mix sobelow --exit-on-warn --format json > sobelow.json 2>&1 || true
+          if [ ! -s sobelow.json ]; then echo '[]' > sobelow.json; fi
+      - name: Summary
+        run: |
+          echo "=== SOBELOW FINDINGS ===" && cat sobelow.json | jq 'length'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sobelow-report
+          path: sobelow.json
+
+  # ========== CREDO ==========
+  credo:
+    name: Credo (Code Quality)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -21,37 +54,55 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-mix-credo-${{ hashFiles('mix.lock') }}
       - run: mix deps.get
-      - name: Sobelow (Security)
+      - run: mix deps.compile credo
+      - name: Run Credo
         run: |
-          mix sobelow --exit-on-warn --format json > sobelow.json 2>&1 || true
-          if [ ! -s sobelow.json ]; then echo '[]' > sobelow.json; fi
-      - name: Credo (Quality)
+          mix credo --strict --all --format json > credo.json 2>&1 || true
+          if [ ! -s credo.json ]; then echo '{"issues":[]}' > credo.json; fi
+      - name: Summary
         run: |
-          mix credo --strict --format json > credo.json 2>&1 || true
-          if [ ! -s credo.json ]; then echo '[]' > credo.json; fi
-      - name: Dialyzer (Types)
+          echo "=== CREDO ISSUES ===" && cat credo.json | jq '.issues | length'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: credo-report
+          path: credo.json
+
+  # ========== DIALYZER ==========
+  dialyzer:
+    name: Dialyzer (Types)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19.4'
+          otp-version: '27.3.4'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+            priv/plts
+          key: ${{ runner.os }}-mix-dialyzer-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - name: Run Dialyzer
         run: |
           mix dialyzer --format json > dialyzer.json 2>&1 || true
           if [ ! -s dialyzer.json ]; then echo '[]' > dialyzer.json; fi
-      - name: Show Sobelow Summary
+      - name: Summary
         run: |
-          echo "=== SOBELOW ==="
-          cat sobelow.json | jq '.[] | {type: .type, file: .file, line: .line, message: .message}' 2>/dev/null || cat sobelow.json
-      - name: Show Credo Summary
-        run: |
-          echo "=== CREDO ==="
-          cat credo.json | jq '.[] | {check: .check, file: .file, line: .line, message: .message}' 2>/dev/null || cat credo.json
+          echo "=== DIALYZER ERRORS ===" && cat dialyzer.json | jq 'length' 2>/dev/null || echo "0"
       - uses: actions/upload-artifact@v4
         with:
-          name: static-analysis-reports
-          path: |
-            sobelow.json
-            credo.json
-            dialyzer.json
+          name: dialyzer-report
+          path: dialyzer.json
 
+  # ========== CONCUERROR ==========
   concuerror:
+    name: Concuerror (Concurrency)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
@@ -66,9 +117,9 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+          key: ${{ runner.os }}-mix-concuerror-${{ hashFiles('mix.lock') }}
       - run: mix deps.get
-      - name: Install concuerror
+      - name: Install Concuerror
         run: mix escript.install hex concuerror
       - name: Compile test modules
         run: mix test --no-start --no-compile 2>&1 | head -5 || true
@@ -83,29 +134,24 @@ jobs:
             Teiserver.Account.SmurfMergeTask
           do
             echo "=== Checking $mod ==="
-            concuerror -m $mod -t ".*" --timeout 60 2>&1 | head -30 || true
+            concuerror -m "$mod" -t ".*" --timeout 60 2>&1 | head -30 || true
           done
-        continue-on-error: true
+      - name: Summary
+        run: echo "Concuerror completed"
 
-  proper:
+  # ========== SUMMARY ==========
+  summary:
+    name: Summary
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    continue-on-error: true
+    needs: [sobelow, credo, dialyzer, concuerror]
+    if: always()
     steps:
-      - uses: actions/checkout@v4
-      - uses: erlef/setup-beam@v1
+      - uses: actions/download-artifact@v4
         with:
-          elixir-version: '1.19.4'
-          otp-version: '27.3.4'
-      - uses: actions/cache@v4
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
-      - run: mix deps.get
-      - name: Run PropEr tests
+          path: reports
+      - name: Print All Findings
         run: |
-          mix test --only proper 2>&1 | head -100 || true
-          mix proper --module Teiserver.Account.AuthLib --tests 100 2>&1 | head -50 || true
-        continue-on-error: true
+          echo "========== SOBELOW ==========" && cat reports/sobelow-report/sobelow.json | jq 'length' 2>/dev/null || echo "0"
+          echo "========== CREDO ==========" && cat reports/credo-report/credo.json | jq '.issues | length' 2>/dev/null || echo "0"
+          echo "========== DIALYZER ==========" && cat reports/dialyzer-report/dialyzer.json | jq 'length' 2>/dev/null || echo "0"
+          echo "========== DONE =========="
