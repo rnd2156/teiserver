@@ -25,7 +25,6 @@ jobs:
             _build
           key: ${{ runner.os }}-mix-sobelow-${{ hashFiles('mix.lock') }}
       - run: mix deps.get
-      - run: mix deps.compile sobelow
       - name: Run Sobelow
         run: |
           mix sobelow --exit-on-warn --format json > sobelow.json 2>&1 || true
@@ -56,7 +55,6 @@ jobs:
             _build
           key: ${{ runner.os }}-mix-credo-${{ hashFiles('mix.lock') }}
       - run: mix deps.get
-      - run: mix deps.compile credo
       - name: Run Credo
         run: |
           mix credo --strict --all --format json > credo.json 2>&1 || true
@@ -151,7 +149,7 @@ jobs:
           path: reports
       - name: Print All Findings
         run: |
-          echo "========== SOBELOW ==========" && cat reports/sobelow-report/sobelow.json | jq 'length' 2>/dev/null || echo "0"
-          echo "========== CREDO ==========" && cat reports/credo-report/credo.json | jq '.issues | length' 2>/dev/null || echo "0"
-          echo "========== DIALYZER ==========" && cat reports/dialyzer-report/dialyzer.json | jq 'length' 2>/dev/null || echo "0"
+          echo "========== SOBELOW ==========" && cat reports/sobelow-report/sobelow.json 2>/dev/null | jq 'length' || echo "0"
+          echo "========== CREDO ==========" && cat reports/credo-report/credo.json 2>/dev/null | jq '.issues | length' || echo "0"
+          echo "========== DIALYZER ==========" && cat reports/dialyzer-report/dialyzer.json 2>/dev/null | jq 'length' || echo "0"
           echo "========== DONE =========="
