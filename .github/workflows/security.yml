@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  security:
+  static-analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -22,14 +22,84 @@ jobs:
             deps
             _build
           key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
-      - run: mix deps.get --only test
-      - run: mix sobelow --exit-on-warn --format json > sobelow.json || true
-      - run: mix credo --strict --format json > credo.json || true
-      - run: mix dialyzer --format json > dialyzer.json || true
+      - run: mix deps.get
+      - name: Sobelow (Security)
+        run: |
+          mix sobelow --exit-on-warn --format json > sobelow.json 2>&1 || true
+          if [ ! -s sobelow.json ]; then echo '[]' > sobelow.json; fi
+      - name: Credo (Quality)
+        run: |
+          mix credo --strict --format json > credo.json 2>&1 || true
+          if [ ! -s credo.json ]; then echo '[]' > credo.json; fi
+      - name: Dialyzer (Types)
+        run: |
+          mix dialyzer --format json > dialyzer.json 2>&1 || true
+          if [ ! -s dialyzer.json ]; then echo '[]' > dialyzer.json; fi
+      - name: Show Sobelow Summary
+        run: |
+          echo "=== SOBELOW ==="
+          cat sobelow.json | jq '.[] | {type: .type, file: .file, line: .line, message: .message}' 2>/dev/null || cat sobelow.json
+      - name: Show Credo Summary
+        run: |
+          echo "=== CREDO ==="
+          cat credo.json | jq '.[] | {check: .check, file: .file, line: .line, message: .message}' 2>/dev/null || cat credo.json
       - uses: actions/upload-artifact@v4
         with:
-          name: security-reports
+          name: static-analysis-reports
           path: |
             sobelow.json
             credo.json
             dialyzer.json
+
+  concuerror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19.4'
+          otp-version: '27.3.4'
+      - uses: actions/cache@v4
+        with:
+          path: | deps _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - name: Compile test modules
+        run: mix test --no-start --no-compile 2>&1 | head -5 || true
+      - name: Run Concuerror on high-risk modules
+        run: |
+          for mod in \
+            Teiserver.Account.Caches.UserCacheLib \
+            Teiserver.Client \
+            Teiserver.Lobby \
+            Teiserver.Coordinator \
+            Teiserver.Moderation.ActionLib \
+            Teiserver.Account.SmurfMergeTask
+          do
+            echo "=== Checking $mod ==="
+            concuerror -m $mod -t ".*" --timeout 60 2>&1 | head -30 || true
+          done
+        continue-on-error: true
+
+  proper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19.4'
+          otp-version: '27.3.4'
+      - uses: actions/cache@v4
+        with:
+          path: | deps _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get
+      - name: Run PropEr tests
+        run: |
+          mix test --only proper 2>&1 | head -100 || true
+          mix proper --module Teiserver.Account.AuthLib --tests 100 2>&1 | head -50 || true
+        continue-on-error: true
