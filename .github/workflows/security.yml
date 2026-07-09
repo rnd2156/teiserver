@@ -1,0 +1,35 @@
+name: Security Analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19.4'
+          otp-version: '27.3.4'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
+      - run: mix deps.get --only test
+      - run: mix sobelow --exit-on-warn --format json > sobelow.json || true
+      - run: mix credo --strict --format json > credo.json || true
+      - run: mix dialyzer --format json > dialyzer.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            sobelow.json
+            credo.json
+            dialyzer.json
